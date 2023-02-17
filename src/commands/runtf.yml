@@ -22,4 +22,6 @@ steps:
   - run:
       name: "echo environment variables from org-global context"
       command: printenv
-  - run: ./run_terraform.sh << parameters.env >> << parameters.cmd >>
+  - run: 
+      name : "run terraform"
+      command: ./run_terraform.sh << parameters.env >> << parameters.cmd >>
