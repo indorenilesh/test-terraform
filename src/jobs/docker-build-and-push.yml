@@ -1,0 +1,73 @@
+description: >
+  Runs terraform init and apply
+
+executor:
+  name: default
+  tag: << parameters.tag >>
+environment:
+  AWS_SHARED_ACCOUNT: "550842621181"
+  AWS_PAGER: ""
+resource_class: large
+docker:
+  - image: 550842621181.dkr.ecr.us-east-1.amazonaws.com/pipeline-image:latest
+parameters:
+  tag:
+    default: latest
+    description: >
+      Executor Image tag to use for the build
+    type: string
+  docker-dir:
+    type: string
+    default: "."
+    description: This is the directory that contains the Dockerfile hierarchy
+  docker-repo:
+    type: string
+    description: This is the name of the repository for the docker build
+  code-artifact-repo:
+    type: string
+    default: none
+    description: An extra code artifact repo to use with 'docker build --build-arg'
+  docker-url:
+    type: string
+    default: 550842621181.dkr.ecr.ap-southeast-2.amazonaws.com
+  enable_codeartifact_buildkit_secret:
+    description: Whether to use Docker buildkit secrets to pass in CodeArtifact Auth token. Enabling improves layer caching.
+    type: boolean
+    default: false
+steps:
+  - checkout
+  - run:
+      name: Generate Docker tag
+      command: |
+        echo 'export DOCKER_TAG="$(git log -1 --pretty=%h)"' >> $BASH_ENV
+  - run:
+      name: Check if image already exists
+      command: |
+        set +e
+        message=$(aws ecr describe-images --repository-name <<parameters.docker-repo>> --image-ids imageTag="${DOCKER_TAG}" 2>&1)
+        status=$?
+
+        if [ $status -eq 0 ]; then
+            echo "docker image already exists"
+            echo 'export DOCKER_IMAGE_EXISTS="true"' >> $BASH_ENV
+        elif [ $status -eq 254 ]; then
+            echo $message
+            echo "continuing..."
+            echo 'export DOCKER_IMAGE_EXISTS="false"' >> $BASH_ENV
+        else
+            echo $message
+            exit $status
+        fi
+  - build-docker:
+      docker-dir: << parameters.docker-dir >>
+      docker-repo: << parameters.docker-repo >>
+      code-artifact-repo: << parameters.code-artifact-repo >>
+      enable_codeartifact_buildkit_secret: << parameters.enable_codeartifact_buildkit_secret >>
+  - run:
+      name: Create .auto.tfvars to pass in ECR image URI to TF project
+      command: |
+        echo ecr_image_uri="\"<<parameters.docker-url>>/<<parameters.docker-repo>>:${DOCKER_TAG}\"" > terraform/.auto.tfvars
+  - persist_to_workspace:
+      root: .
+      paths:
+        - terraform/.auto.tfvars

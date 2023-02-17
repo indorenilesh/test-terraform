@@ -1,0 +1,32 @@
+description: >
+  Runs terraform init and validate
+
+executor:
+  name: default
+  tag: << parameters.tag >>
+parameters:
+  tag:
+    default: latest
+    description: >
+      Executor Image tag to use for the build
+    type: string
+  env:
+    type: string
+    default: "dev"
+    description: "environment to run terraform in"
+  attach_workspace:
+    type: boolean
+    default: true
+    description: >
+      Boolean for whether or not to attach to an existing workspace.
+  workspace_root:
+    type: string
+    default: "."
+    description: >
+      Workspace root path that is either an absolute path or a path relative
+      to the working directory. Defaults to '.' (the working directory)
+steps:
+  - checkout
+  - runtf:
+      env: << parameters.env >>
+      cmd: validate

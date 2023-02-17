@@ -1,0 +1,25 @@
+description: >
+  Run terraform commands
+parameters:
+  env:
+    type: string
+    default: dev
+  cmd:
+    type: string
+    default: validate
+steps:
+  - run:
+      name: Git TF module access
+      command: |
+        cat \<<EOT > ~/.gitconfig
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = https://github.com/
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = https://api@github.com/
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = git@github.com:
+        EOT
+  - run:
+      name: "echo environment variables from org-global context"
+      command: printenv
+  - run: ./run_terraform.sh << parameters.env >> << parameters.cmd >>
