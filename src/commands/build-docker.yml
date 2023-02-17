@@ -1,0 +1,103 @@
+description: Build Docker containers
+parameters:
+  docker-url:
+    type: string
+    default: 550842621181.dkr.ecr.ap-southeast-2.amazonaws.com
+  docker-dir:
+    type: string
+    default: .
+    description: This is the directory that contains the Dockerfile hierarchy
+  docker-repo:
+    type: string
+    description: This is the name of the repository for the docker build
+  # The following parameters are to access Code Artificat from Docker builds https://docs.aws.amazon.com/codeartifact/latest/ug/python-configure-without-pip.html
+  code-artifact-domain:
+    type: string
+    default: linius
+    description: The CodeArtifact domain
+  code-artifact-account:
+    type: string
+    default: "774774188620"
+    description: The account to assume a role into to access CodeArtifact
+  code-artifact-repo:
+    type: string
+    default: none
+    description: An extra code artifact repo to use with 'docker build --build-arg'
+  docker-version:
+    description: The version of Docker to use when building the image
+    type: string
+    default: "20.10.11"
+  enable_codeartifact_buildkit_secret:
+    description: Whether to use Docker buildkit secrets to pass in CodeArtifact Auth token. Enabling improves layer caching.
+    type: boolean
+    default: false
+steps:
+  - when:
+      condition:
+        not:
+          equal: [none, << parameters.code-artifact-repo >>]
+      steps:
+        - run:
+            name: Get CodeArtificat authentication token
+            command: |
+              if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+              CA_DOMAIN="<< parameters.code-artifact-domain >>"
+              CA_OWNER="<< parameters.code-artifact-account >>"
+              CODEARTIFACT_AUTH_TOKEN=$(aws codeartifact get-authorization-token --domain "$CA_DOMAIN" --domain-owner "$CA_OWNER" --query authorizationToken --output text)
+              [[ $? -eq "0" ]] && echo "export CODEARTIFACT_AUTH_TOKEN=$CODEARTIFACT_AUTH_TOKEN" >> $BASH_ENV || exit 1
+        - run:
+            name: Add custom pip index URL
+            command: |
+              if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+              CA_DOMAIN="<< parameters.code-artifact-domain >>"
+              CA_OWNER="<< parameters.code-artifact-account >>"
+              PIP_EXTRA_INDEX_URL="https://aws:${CODEARTIFACT_AUTH_TOKEN}@$CA_DOMAIN-$CA_OWNER.d.codeartifact.${AWS_DEFAULT_REGION}.amazonaws.com/pypi/<< parameters.code-artifact-repo >>/simple/"
+              [[ $? -eq "0" ]] && echo "export PIP_EXTRA_INDEX_URL=$PIP_EXTRA_INDEX_URL" >> $BASH_ENV || exit 1
+  - setup_remote_docker:
+      docker_layer_caching: true
+      version: <<parameters.docker-version>>
+  - run:
+      name: Git https access
+      command: |
+        echo "The value of DOCKER_IMAGE_EXISTS is: $DOCKER_IMAGE_EXISTS"
+        if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+        cat \<<EOT > ~/.gitconfig
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = https://github.com/
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = https://api@github.com/
+        [url "https://${GIT_TOKEN}@github.com/"]
+          insteadOf = git@github.com:
+        EOT
+  - run:
+      name: ECR Login
+      command: |
+        if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+        aws ecr get-login-password | docker login --username AWS --password-stdin "$AWS_SHARED_ACCOUNT.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+  - run:
+      name: Docker build
+      command: |
+        if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+        CWD=$(pwd)
+        cd << parameters.docker-dir >>
+        ENABLE_CODEARTIFACT_BUILDKIT_SECRET="<< parameters.enable_codeartifact_buildkit_secret >>"
+        if [ "$ENABLE_CODEARTIFACT_BUILDKIT_SECRET" == "true" ]; then
+          echo "ENABLE BUILDKIT"
+          echo $PIP_EXTRA_INDEX_URL > /tmp/codeartifact_auth_token
+          DOCKER_BUILDKIT=1 docker build --secret id=codeartifact_auth_token,src=/tmp/codeartifact_auth_token -t "<< parameters.docker-repo >>:${DOCKER_TAG}" . --build-arg GITHUB_TOKEN=${GIT_TOKEN}
+        else
+          echo "BUILDKIT NOT ENABLED"
+          docker build -t "<< parameters.docker-repo >>:${DOCKER_TAG}" --build-arg PIP_EXTRA_INDEX_URL . --build-arg GITHUB_TOKEN=${GIT_TOKEN}
+        fi
+
+        cd $CWD
+  - run:
+      name: Docker tag
+      command: |
+        if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+        docker tag "<< parameters.docker-repo >>:${DOCKER_TAG}" "${AWS_SHARED_ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/<< parameters.docker-repo >>:${DOCKER_TAG}"
+  - run:
+      name: Docker push
+      command: |
+        if [ "$DOCKER_IMAGE_EXISTS" == "true" ]; then echo "image exists, skipping step" && exit 0; fi
+        docker push "${AWS_SHARED_ACCOUNT}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com/<< parameters.docker-repo >>:${DOCKER_TAG}"

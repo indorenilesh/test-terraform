@@ -1,0 +1,16 @@
+description: Build Docker containers
+parameters:
+  docker-url:
+    type: string
+    default: 550842621181.dkr.ecr.ap-southeast-2.amazonaws.com
+  docker-repo:
+    type: string
+    description: This is the name of the repository for the docker build
+steps:
+  - run:
+      name: Check if image already exists
+      command: |
+        if aws ecr describe-images --repository-name <<parameters.docker-repo>> --image-ids imageTag="${DOCKER_TAG}"
+        then
+          circleci-agent step halt
+        fi
